@@ -8,7 +8,11 @@ from pymongo.errors import ConnectionFailure
 
 from eventEngine import *
 from vtGateway import *
+from vtFunction import loadMongoSetting
+
 from ctaAlgo.ctaEngine import CtaEngine
+from dataRecorder.drEngine import DrEngine
+from riskManager.rmEngine import RmEngine
 
 
 ########################################################################
@@ -28,11 +32,13 @@ class MainEngine(object):
         # MongoDB数据库相关
         self.dbClient = None    # MongoDB客户端对象
         
-        # CTA引擎
-        self.ctaEngine = CtaEngine(self, self.eventEngine)
-        
         # 调用一个个初始化函数
         self.initGateway()
+
+        # 扩展模块
+        self.ctaEngine = CtaEngine(self, self.eventEngine)
+        self.drEngine = DrEngine(self, self.eventEngine)
+        self.rmEngine = RmEngine(self, self.eventEngine)
         
     #----------------------------------------------------------------------
     def initGateway(self):
@@ -68,13 +74,27 @@ class MainEngine(object):
             self.gatewayDict['FEMAS'].setQryEnabled(True)
         except Exception, e:
             print e  
-            
+        
+        try:
+            from xspeedGateway.xspeedGateway import XspeedGateway
+            self.addGateway(XspeedGateway, 'XSPEED')
+            self.gatewayDict['XSPEED'].setQryEnabled(True)
+        except Exception, e:
+            print e          
+        
         try:
             from ksgoldGateway.ksgoldGateway import KsgoldGateway
             self.addGateway(KsgoldGateway, 'KSGOLD')
             self.gatewayDict['KSGOLD'].setQryEnabled(True)
         except Exception, e:
             print e
+            
+        try:
+            from sgitGateway.sgitGateway import SgitGateway
+            self.addGateway(SgitGateway, 'SGIT')
+            self.gatewayDict['SGIT'].setQryEnabled(True)
+        except Exception, e:
+            print e        
             
         try:
             from windGateway.windGateway import WindGateway
@@ -121,6 +141,10 @@ class MainEngine(object):
     #----------------------------------------------------------------------
     def sendOrder(self, orderReq, gatewayName):
         """对特定接口发单"""
+        # 如果风控检查失败则不发单
+        if not self.rmEngine.checkRisk(orderReq):
+            return ''    
+        
         if gatewayName in self.gatewayDict:
             gateway = self.gatewayDict[gatewayName]
             return gateway.sendOrder(orderReq)
@@ -180,8 +204,16 @@ class MainEngine(object):
     def dbConnect(self):
         """连接MongoDB数据库"""
         if not self.dbClient:
+            # 读取MongoDB的设置
+            host, port = loadMongoSetting()
+                
             try:
-                self.dbClient = MongoClient()
+                # 设置MongoDB操作的超时时间为0.5秒
+                self.dbClient = MongoClient(host, port, serverSelectionTimeoutMS=500)
+                
+                # 调用server_info查询服务器状态，防止服务器异常并未连接成功
+                self.dbClient.server_info()
+
                 self.writeLog(u'MongoDB连接成功')
             except ConnectionFailure:
                 self.writeLog(u'MongoDB连接失败')
